@@ -46,6 +46,7 @@ struct RunesContext {
     frame_texture: Option<egui::TextureHandle>,
     running: bool,
     chr_rom_dirty: bool,
+    palette_snapshot: [u8; 32],
     last_tick: Instant,
     ppu_cycle_accumulator: f64,
 }
@@ -63,6 +64,7 @@ impl egui_dock::TabViewer for RunesContext {
             "ROM Memory Inspector" => self.rom_memory_inspector(ui),
             "ROM Header Inspector" => self.rom_header_inspector(ui),
             "CHR ROM Inspector" => self.chr_rom_inspector(ui),
+            "Color Palette" => self.color_palette_inspector(ui),
             _ => {}
         }
     }
@@ -178,6 +180,51 @@ impl RunesContext {
         } else {
             self.frame_texture = Some(ctx.load_texture("ppu-frame", image, Default::default()));
         }
+    }
+
+    fn normalize_palette_index(palette_index: u8) -> u8 {
+        let palette_index = palette_index & 0x1F;
+        match palette_index {
+            0x10 => 0x00,
+            0x14 => 0x04,
+            0x18 => 0x08,
+            0x1C => 0x0C,
+            _ => palette_index,
+        }
+    }
+
+    fn palette_value(&self, palette_index: u8) -> u8 {
+        let palette_index = Self::normalize_palette_index(palette_index);
+        self.cpu.bus.ppu.palette[palette_index as usize] & 0x3F
+    }
+
+    fn set_palette_value(&mut self, palette_index: u8, value: u8) {
+        let palette_index = Self::normalize_palette_index(palette_index);
+        self.cpu.bus.ppu.palette[palette_index as usize] = value & 0x3F;
+    }
+
+    fn nearest_palette_value(&self, rgb: [u8; 3]) -> u8 {
+        let (r, g, b) = (rgb[0] as i32, rgb[1] as i32, rgb[2] as i32);
+        let mut best_index = 0;
+        let mut best_distance = u32::MAX;
+
+        for (index, (pr, pg, pb)) in SYSTEM_PALLETE.iter().enumerate() {
+            let dr = r - *pr as i32;
+            let dg = g - *pg as i32;
+            let db = b - *pb as i32;
+            let distance = (dr * dr + dg * dg + db * db) as u32;
+            if distance < best_distance {
+                best_distance = distance;
+                best_index = index;
+            }
+        }
+
+        best_index as u8
+    }
+
+    fn palette_rgb(&self, palette_index: u8) -> (u8, u8, u8) {
+        let value = self.palette_value(palette_index);
+        SYSTEM_PALLETE[value as usize]
     }
 
     fn cpu_memory_inspector(&mut self, ui: &mut egui::Ui) {
@@ -304,6 +351,12 @@ impl RunesContext {
             let width = 256;
             let height = 240;
             let mut renderer = renderer::PPURenderer::new_custom_size(width, height);
+            let palette_colors = [
+                self.palette_rgb(0),
+                self.palette_rgb(1),
+                self.palette_rgb(2),
+                self.palette_rgb(3),
+            ];
 
             let mut tile_y = 0;
             let mut tile_x = 0;
@@ -324,14 +377,7 @@ impl RunesContext {
                         let color = (1 & upper) << 1 | (1 & lower);
                         upper >>= 1;
                         lower >>= 1;
-
-                        let rgb = match color {
-                            0 => SYSTEM_PALLETE[0x01],
-                            1 => SYSTEM_PALLETE[0x23],
-                            2 => SYSTEM_PALLETE[0x30],
-                            3 => SYSTEM_PALLETE[0x3F],
-                            _ => panic!("Invalid color value"),
-                        };
+                        let rgb = palette_colors[color as usize];
 
                         renderer.set_pixel(tile_x + tile_index_x, tile_y + tile_index_y, rgb);
                     }
@@ -357,6 +403,46 @@ impl RunesContext {
         if let Some(texture) = &self.chr_rom_texture {
             let size = ui.available_size().min_elem();
             ui.image(texture, [size, size]);
+        }
+    }
+
+    fn color_palette_inspector(&mut self, ui: &mut egui::Ui) {
+        ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+
+        let labels = ["BG 0", "BG 1", "BG 2", "BG 3", "SPR 0", "SPR 1", "SPR 2", "SPR 3"];
+        let mut palette_changed = false;
+
+        for (row, label) in labels.iter().enumerate() {
+            let base = row * 4;
+            ui.horizontal(|ui| {
+                ui.label(format!("{:<5}", label));
+                for color_index in 0..4 {
+                    let palette_index = (base + color_index) as u8;
+                    let mut palette_value = self.palette_value(palette_index);
+                    let rgb = SYSTEM_PALLETE[palette_value as usize];
+                    let mut srgb = [rgb.0, rgb.1, rgb.2];
+
+                    ui.push_id(palette_index, |ui| {
+                        let response = ui.color_edit_button_srgb(&mut srgb);
+                        if response.changed() {
+                            let new_value = self.nearest_palette_value(srgb);
+                            if new_value != palette_value {
+                                self.set_palette_value(palette_index, new_value);
+                                palette_value = new_value;
+                                palette_changed = true;
+                            }
+                        }
+                    });
+
+                    ui.label(format!("{:02X}", palette_value));
+                }
+            });
+        }
+
+        if palette_changed {
+            self.chr_rom_dirty = true;
+            self.palette_snapshot = self.cpu.bus.ppu.palette;
+            ui.ctx().request_repaint();
         }
     }
 
@@ -399,19 +485,48 @@ impl RunesApp {
     fn new(mut cpu: CPU) -> Self {
         cpu.reset();
         cpu.bus.ppu.reset();
+        let palette_snapshot = cpu.bus.ppu.palette;
         let mut tree = Tree::new(vec!["Game".to_owned()]);
+        let left_column_fraction = 0.17;
+        let game_column_fraction = 0.82;
 
-        let [game_node_index , cpu_memory_inspector_node_index] = tree.split_right(NodeIndex::root(), 0.78 ,vec!["CPU Memory Inspector".to_owned()]);
+        let [game_node_index, chr_rom_node_index] = tree.split_left(
+            NodeIndex::root(),
+            left_column_fraction,
+            vec!["CHR ROM Inspector".to_owned()],
+        );
+        tree.split_below(chr_rom_node_index, 0.6, vec!["Color Palette".to_owned()]);
 
-        tree.split_left(game_node_index, 0.3, vec!["CHR ROM Inspector".to_owned()]);
+        let [_game_node_index, cpu_memory_inspector_node_index] = tree.split_right(
+            game_node_index,
+            game_column_fraction,
+            vec!["CPU Memory Inspector".to_owned()],
+        );
 
-        let [_ , rom_memory_inspector_node_index] = tree.split_below(cpu_memory_inspector_node_index, 0.38, vec!["ROM Memory Inspector".to_owned(), "ROM Header Inspector".to_owned()]);
-        let [_ , cpu_register_inspector_node_index] = tree.split_below(rom_memory_inspector_node_index, 0.7, vec!["CPU Register Inspector".to_owned()]);
-
-        tree.split_right(
+        let [_cpu_memory_node_index, rom_memory_inspector_node_index] = tree.split_below(
+            cpu_memory_inspector_node_index,
+            0.28,
+            vec!["ROM Memory Inspector".to_owned()],
+        );
+        let [_rom_memory_node_index, rom_header_inspector_node_index] = tree.split_below(
+            rom_memory_inspector_node_index,
+            0.3,
+            vec!["ROM Header Inspector".to_owned()],
+        );
+        let [_rom_header_node_index, cpu_register_inspector_node_index] = tree.split_below(
+            rom_header_inspector_node_index,
+            0.35,
+            vec!["CPU Register Inspector".to_owned()],
+        );
+        let [_cpu_register_node_index, cpu_debug_inspector_node_index] = tree.split_below(
             cpu_register_inspector_node_index,
+            0.45,
+            vec!["CPU Debug Inspector".to_owned()],
+        );
+        tree.split_below(
+            cpu_debug_inspector_node_index,
             0.5,
-            vec!["CPU Debug Inspector".to_owned(), "Controller Inspector".to_owned()],
+            vec!["Controller Inspector".to_owned()],
         );
 
         Self {
@@ -423,6 +538,7 @@ impl RunesApp {
                 frame_texture: None,
                 running: false,
                 chr_rom_dirty: true,
+                palette_snapshot,
                 last_tick: Instant::now(),
                 ppu_cycle_accumulator: 0.0,
             },
@@ -481,6 +597,11 @@ impl eframe::App for RunesApp {
             if self.context.cpu.bus.cartridge.chr_is_ram {
                 self.context.chr_rom_dirty = true;
             }
+        }
+
+        if self.context.palette_snapshot != self.context.cpu.bus.ppu.palette {
+            self.context.chr_rom_dirty = true;
+            self.context.palette_snapshot = self.context.cpu.bus.ppu.palette;
         }
 
         DockArea::new(&mut self.tree)
