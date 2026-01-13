@@ -11,9 +11,17 @@ const CPU_CLOCK_HZ: f64 = 1_789_773.0;
 const PPU_CLOCK_HZ: f64 = CPU_CLOCK_HZ * 3.0;
 const TARGET_FPS: f64 = 60.0988;
 const MAX_TIMESTEP: Duration = Duration::from_millis(100);
+const DEFAULT_UI_SCALE: f32 = 1.0;
+const UI_SCALE_ENV: &str = "RUNES_UI_SCALE";
 
 pub fn ui(cpu: CPU) -> Result<(), eframe::Error> {
     env_logger::init();
+    let ui_scale = std::env::var(UI_SCALE_ENV)
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| *value > 0.0)
+        .unwrap_or(DEFAULT_UI_SCALE);
+
     let options = eframe::NativeOptions {
         initial_window_size: Some(egui::Vec2::new(1920.0, 1080.0)),
         ..Default::default()
@@ -22,7 +30,11 @@ pub fn ui(cpu: CPU) -> Result<(), eframe::Error> {
     eframe::run_native(
         "runes", 
         options, 
-        Box::new(|_cc| Box::<RunesApp>::new(RunesApp::new(cpu))))
+        Box::new(move |cc| {
+            let pixels_per_point = cc.egui_ctx.pixels_per_point();
+            cc.egui_ctx.set_pixels_per_point(pixels_per_point * ui_scale);
+            Box::<RunesApp>::new(RunesApp::new(cpu))
+        }))
 }
 
 struct RunesContext {

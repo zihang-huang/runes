@@ -116,6 +116,7 @@ pub struct PPU {
 
     pub frame_complete: bool,
     pub frame_buffer: Vec<u8>,
+    background_index_buffer: Vec<u8>,
 
     chr_is_ram: bool,
     oam_addr: u8,
@@ -133,7 +134,7 @@ impl PPU {
         PPU {
             chr_rom,
             vram: vec![0; vram_size],
-            oam: [0; 256],
+            oam: [0xFF; 256],
             palette: [0; 32],
             address_register: 0,
             address_latch: true,
@@ -154,6 +155,7 @@ impl PPU {
 
             frame_complete: false,
             frame_buffer: vec![0; SCREEN_WIDTH * SCREEN_HEIGHT * 3],
+            background_index_buffer: vec![0; SCREEN_WIDTH * SCREEN_HEIGHT],
 
             chr_is_ram,
             oam_addr: 0,
@@ -169,6 +171,7 @@ impl PPU {
         self.mask_register = 0;
         self.status_register = 0;
         self.data_buffer = 0;
+        self.oam.fill(0xFF);
         self.scanline = 0;
         self.cycle = 0;
         self.nmi = false;
@@ -177,6 +180,7 @@ impl PPU {
         self.scroll_x = 0;
         self.scroll_y = 0;
         self.frame_buffer.fill(0);
+        self.background_index_buffer.fill(0);
     }
 
     // Mirroring
@@ -376,6 +380,9 @@ impl PPU {
             return;
         }
 
+        let show_leftmost_sprites = self.mask_register & 0x04 != 0;
+        let show_background = self.mask_register & 0x08 != 0;
+
         let sprite_height = if self.get_control_flag(PPUControlFlags::SpriteSize) {
             16
         } else {
@@ -391,6 +398,7 @@ impl PPU {
 
             let flip_h = attributes & 0x40 != 0;
             let flip_v = attributes & 0x80 != 0;
+            let behind_background = attributes & 0x20 != 0;
             let palette_index = attributes & 0x03;
 
             for row in 0..sprite_height {
@@ -437,15 +445,35 @@ impl PPU {
 
                     let pixel_x = x + col as i16;
                     let pixel_y = y + row as i16;
-                    if pixel_x >= 0 && pixel_y >= 0 {
-                        self.set_frame_pixel(pixel_x as usize, pixel_y as usize, rgb);
+                    if pixel_x < 0 || pixel_y < 0 {
+                        continue;
                     }
+
+                    let pixel_x = pixel_x as usize;
+                    let pixel_y = pixel_y as usize;
+                    if pixel_x >= SCREEN_WIDTH || pixel_y >= SCREEN_HEIGHT {
+                        continue;
+                    }
+
+                    if pixel_x < 8 && !show_leftmost_sprites {
+                        continue;
+                    }
+
+                    if behind_background && show_background {
+                        let bg_color =
+                            self.background_index_buffer[pixel_y * SCREEN_WIDTH + pixel_x];
+                        if bg_color != 0 {
+                            continue;
+                        }
+                    }
+
+                    self.set_frame_pixel(pixel_x, pixel_y, rgb);
                 }
             }
         }
     }
 
-    fn background_pixel(&self, x: u16, y: u16) -> (u8, u8, u8) {
+    fn background_pixel_info(&self, x: u16, y: u16) -> ((u8, u8, u8), u8) {
         let base_nametable = self.control_register & 0x03;
         let base_x = if base_nametable & 0x01 != 0 { 256 } else { 0 };
         let base_y = if base_nametable & 0x02 != 0 { 240 } else { 0 };
@@ -499,7 +527,11 @@ impl PPU {
         };
 
         let palette_value = self.ppu_read(palette_addr) & 0x3F;
-        SYSTEM_PALLETE[palette_value as usize]
+        (SYSTEM_PALLETE[palette_value as usize], color)
+    }
+
+    fn background_pixel(&self, x: u16, y: u16) -> (u8, u8, u8) {
+        self.background_pixel_info(x, y).0
     }
 
     pub fn clock(&mut self) {
@@ -507,12 +539,20 @@ impl PPU {
             if (1..=256).contains(&self.cycle) {
                 let x = (self.cycle - 1) as usize;
                 let y = self.scanline as usize;
-                let rgb = if self.mask_register & 0x08 != 0 {
-                    self.background_pixel(x as u16, y as u16)
+                let show_background = self.mask_register & 0x08 != 0;
+                let show_leftmost_background = self.mask_register & 0x02 != 0;
+                let (rgb, bg_color) = if show_background {
+                    if x < 8 && !show_leftmost_background {
+                        let palette_value = self.ppu_read(0x3F00) & 0x3F;
+                        (SYSTEM_PALLETE[palette_value as usize], 0)
+                    } else {
+                        self.background_pixel_info(x as u16, y as u16)
+                    }
                 } else {
                     let palette_value = self.ppu_read(0x3F00) & 0x3F;
-                    SYSTEM_PALLETE[palette_value as usize]
+                    (SYSTEM_PALLETE[palette_value as usize], 0)
                 };
+                self.background_index_buffer[y * SCREEN_WIDTH + x] = bg_color;
                 self.set_frame_pixel(x, y, rgb);
             }
         }
