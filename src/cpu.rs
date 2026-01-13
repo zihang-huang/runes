@@ -233,14 +233,16 @@ impl CPU {
     }
 
     fn zpx(&mut self) -> u8 {
-        self.addr_abs = (self.read(self.program_counter, false) + self.x_register) as u16;
+        let base = self.read(self.program_counter, false);
+        self.addr_abs = base.wrapping_add(self.x_register) as u16;
         self.program_counter += 1;
         self.addr_abs &= 0x00FF;
         0
     }
 
     fn zpy(&mut self) -> u8 {
-        self.addr_abs = (self.read(self.program_counter, false) + self.y_register) as u16;
+        let base = self.read(self.program_counter, false);
+        self.addr_abs = base.wrapping_add(self.y_register) as u16;
         self.program_counter += 1;
         self.addr_abs &= 0x00FF;
         0
@@ -376,7 +378,7 @@ impl CPU {
     fn bcs(&mut self) -> u8 {
         if self.get_flag(StatusFlag::C) == 1 {
             self.cycles += 1;
-            self.addr_abs = self.program_counter + self.addr_rel;
+            self.addr_abs = self.program_counter.wrapping_add(self.addr_rel);
 
             // If the branch crosses a page boundary, an additional cycle is required
             if (self.addr_abs & 0xFF00) != (self.program_counter & 0xFF00) {
@@ -392,7 +394,7 @@ impl CPU {
     fn bcc(&mut self) -> u8 {
         if self.get_flag(StatusFlag::C) == 0{
             self.cycles += 1;
-            self.addr_abs = self.program_counter + self.addr_rel;
+            self.addr_abs = self.program_counter.wrapping_add(self.addr_rel);
 
             // If the branch crosses a page boundary, an additional cycle is required
             if (self.addr_abs & 0xFF00) != (self.program_counter & 0xFF00) {
@@ -408,7 +410,7 @@ impl CPU {
     fn beq(&mut self) -> u8 {
         if self.get_flag(StatusFlag::Z) == 1 {
             self.cycles += 1;
-            self.addr_abs = self.program_counter + self.addr_rel;
+            self.addr_abs = self.program_counter.wrapping_add(self.addr_rel);
 
             // If the branch crosses a page boundary, an additional cycle is required
             if (self.addr_abs & 0xFF00) != (self.program_counter & 0xFF00) {
@@ -424,7 +426,7 @@ impl CPU {
     fn bmi(&mut self) -> u8 {
         if self.get_flag(StatusFlag::N) == 1{
             self.cycles += 1;
-            self.addr_abs = self.program_counter + self.addr_rel;
+            self.addr_abs = self.program_counter.wrapping_add(self.addr_rel);
 
             // If the branch crosses a page boundary, an additional cycle is required
             if (self.addr_abs & 0xFF00) != (self.program_counter & 0xFF00) {
@@ -456,7 +458,7 @@ impl CPU {
     fn bpl(&mut self) -> u8 {
         if self.get_flag(StatusFlag::N) == 0{
             self.cycles += 1;
-            self.addr_abs = self.program_counter + self.addr_rel;
+            self.addr_abs = self.program_counter.wrapping_add(self.addr_rel);
 
             // If the branch crosses a page boundary, an additional cycle is required
             if (self.addr_abs & 0xFF00) != (self.program_counter & 0xFF00) {
@@ -472,7 +474,7 @@ impl CPU {
     fn bvc(&mut self) -> u8 {
         if self.get_flag(StatusFlag::V) == 0{
             self.cycles += 1;
-            self.addr_abs = self.program_counter + self.addr_rel;
+            self.addr_abs = self.program_counter.wrapping_add(self.addr_rel);
 
             // If the branch crosses a page boundary, an additional cycle is required
             if (self.addr_abs & 0xFF00) != (self.program_counter & 0xFF00) {
@@ -488,7 +490,7 @@ impl CPU {
     fn bvs(&mut self) -> u8 {
         if self.get_flag(StatusFlag::V) == 1{
             self.cycles += 1;
-            self.addr_abs = self.program_counter + self.addr_rel;
+            self.addr_abs = self.program_counter.wrapping_add(self.addr_rel);
 
             // If the branch crosses a page boundary, an additional cycle is required
             if (self.addr_abs & 0xFF00) != (self.program_counter & 0xFF00) {
@@ -507,12 +509,12 @@ impl CPU {
     }
 
     fn jsr(&mut self) -> u8 {
-        self.program_counter -= 1;
+        self.program_counter = self.program_counter.wrapping_sub(1);
 
         self.write(0x0100 + self.stack_pointer as u16, (self.program_counter >> 8) as u8);
-        self.stack_pointer -= 1;
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1);
         self.write(0x0100 + self.stack_pointer as u16, self.program_counter as u8);
-        self.stack_pointer -= 1;
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1);
 
         self.program_counter = self.addr_abs;
         0
@@ -719,7 +721,7 @@ impl CPU {
 
     fn cmp(&mut self) -> u8 {
         self.fetch();
-        let temp: u16 = self.accumulator as u16 - self.fetched as u16;
+        let temp = self.accumulator.wrapping_sub(self.fetched) as u16;
         self.set_flag(StatusFlag::C, self.accumulator >= self.fetched);
         self.set_flag(StatusFlag::Z, (temp & 0x00FF) == 0x0000);
         self.set_flag(StatusFlag::N, (temp & 0x0080) != 0);
@@ -728,7 +730,7 @@ impl CPU {
 
     fn cpx(&mut self) -> u8 {
         self.fetch();
-        let temp: u16 = self.x_register as u16 - self.fetched as u16;
+        let temp = self.x_register.wrapping_sub(self.fetched) as u16;
         self.set_flag(StatusFlag::C, self.x_register >= self.fetched);
         self.set_flag(StatusFlag::Z, (temp & 0x00FF) == 0x0000);
         self.set_flag(StatusFlag::N, (temp & 0x0080) != 0);
@@ -737,7 +739,7 @@ impl CPU {
 
     fn cpy(&mut self) -> u8 {
         self.fetch();
-        let temp: u16 = self.y_register as u16 - self.fetched as u16;
+        let temp = self.y_register.wrapping_sub(self.fetched) as u16;
         self.set_flag(StatusFlag::C, self.y_register >= self.fetched);
         self.set_flag(StatusFlag::Z, (temp & 0x00FF) == 0x0000);
         self.set_flag(StatusFlag::N, (temp & 0x0080) != 0);
@@ -769,7 +771,7 @@ impl CPU {
 
     fn dec(&mut self) -> u8 {
         self.fetch();
-        let temp: u16 = self.fetched as u16 - 1;
+        let temp = self.fetched.wrapping_sub(1) as u16;
         self.write(self.addr_abs, temp as u8);
         self.set_flag(StatusFlag::Z, (temp & 0x00FF) == 0x0000);
         self.set_flag(StatusFlag::N, (temp & 0x0080) != 0);
@@ -817,7 +819,7 @@ impl CPU {
 
     fn pha(&mut self) -> u8 {
         self.write(0x0100 + self.stack_pointer as u16, self.accumulator);
-        self.stack_pointer -= 1;
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1);
         0
     }
 
@@ -825,12 +827,12 @@ impl CPU {
         self.write(0x0100 + self.stack_pointer as u16, self.status | StatusFlag::B as u8 | StatusFlag::U as u8);
         self.set_flag(StatusFlag::B, false);
         self.set_flag(StatusFlag::U, false);
-        self.stack_pointer -= 1;
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1);
         0
     }
 
     fn pla(&mut self) -> u8 {
-        self.stack_pointer += 1;
+        self.stack_pointer = self.stack_pointer.wrapping_add(1);
         self.accumulator = self.read(0x0100 + self.stack_pointer as u16, false);
         self.set_flag(StatusFlag::Z, self.accumulator == 0x00);
         self.set_flag(StatusFlag::N, (self.accumulator & 0x80) != 0);
@@ -838,7 +840,7 @@ impl CPU {
     }
 
     fn plp(&mut self) -> u8 {
-        self.stack_pointer += 1;
+        self.stack_pointer = self.stack_pointer.wrapping_add(1);
         self.status = self.read(0x0100 + self.stack_pointer as u16, false);
         self.set_flag(StatusFlag::U, true);
         0
@@ -847,15 +849,15 @@ impl CPU {
     fn irq(&mut self) -> u8 {
         if self.get_flag(StatusFlag::I) == 0 {
             self.write(0x0100 + self.stack_pointer as u16, ((self.program_counter >> 8) & 0x00FF) as u8);
-            self.stack_pointer -= 1;
+            self.stack_pointer = self.stack_pointer.wrapping_sub(1);
             self.write(0x0100 + self.stack_pointer as u16, (self.program_counter & 0x00FF) as u8);
-            self.stack_pointer -= 1;
+            self.stack_pointer = self.stack_pointer.wrapping_sub(1);
 
             self.set_flag(StatusFlag::B, false);
             self.set_flag(StatusFlag::U, true);
             self.set_flag(StatusFlag::I, true);
             self.write(0x0100 + self.stack_pointer as u16, self.status);
-            self.stack_pointer -= 1;
+            self.stack_pointer = self.stack_pointer.wrapping_sub(1);
 
             self.addr_abs = 0xFFFE;
             let lo = self.read(self.addr_abs, false) as u16;
@@ -870,15 +872,15 @@ impl CPU {
 
     fn nmi(&mut self) -> u8 {
         self.write(0x0100 + self.stack_pointer as u16, ((self.program_counter >> 8) & 0x00FF) as u8);
-        self.stack_pointer -= 1;
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1);
         self.write(0x0100 + self.stack_pointer as u16, (self.program_counter & 0x00FF) as u8);
-        self.stack_pointer -= 1;
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1);
 
         self.set_flag(StatusFlag::B, false);
         self.set_flag(StatusFlag::U, true);
         self.set_flag(StatusFlag::I, true);
         self.write(0x0100 + self.stack_pointer as u16, self.status);
-        self.stack_pointer -= 1;
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1);
 
         self.addr_abs = 0xFFFA;
         let lo = self.read(self.addr_abs, false) as u16;
@@ -890,14 +892,14 @@ impl CPU {
     }
 
     fn rti(&mut self) -> u8 {
-        self.stack_pointer += 1;
+        self.stack_pointer = self.stack_pointer.wrapping_add(1);
         self.status = self.read(0x0100 + self.stack_pointer as u16, false);
         self.status &= !(StatusFlag::B as u8);
         self.status &= !(StatusFlag::U as u8);
 
-        self.stack_pointer += 1;
+        self.stack_pointer = self.stack_pointer.wrapping_add(1);
         let lo = self.read(0x0100 + self.stack_pointer as u16, false) as u16;
-        self.stack_pointer += 1;
+        self.stack_pointer = self.stack_pointer.wrapping_add(1);
         let hi = self.read(0x0100 + self.stack_pointer as u16, false) as u16;
         self.program_counter = (hi << 8) | lo;
 
@@ -905,28 +907,28 @@ impl CPU {
     }
 
     fn rts(&mut self) -> u8 {
-        self.stack_pointer += 1;
+        self.stack_pointer = self.stack_pointer.wrapping_add(1);
         let lo = self.read(0x0100 + self.stack_pointer as u16, false) as u16;
-        self.stack_pointer += 1;
+        self.stack_pointer = self.stack_pointer.wrapping_add(1);
         let hi = self.read(0x0100 + self.stack_pointer as u16, false) as u16;
         self.program_counter = (hi << 8) | lo;
 
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
         0
     }
 
     fn brk(&mut self) -> u8 {
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         self.set_flag(StatusFlag::I, true);
         self.write(0x0100 + self.stack_pointer as u16, ((self.program_counter >> 8) & 0x00FF) as u8);
-        self.stack_pointer -= 1;
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1);
         self.write(0x0100 + self.stack_pointer as u16, (self.program_counter & 0x00FF) as u8);
-        self.stack_pointer -= 1;
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1);
 
         self.set_flag(StatusFlag::B, true);
         self.write(0x0100 + self.stack_pointer as u16, self.status);
-        self.stack_pointer -= 1;
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1);
         self.set_flag(StatusFlag::B, false);
 
         self.addr_abs = 0xFFFE;
@@ -956,13 +958,13 @@ impl CPU {
         self.addr_abs = 0xFFFC;
         let lo = self.read(self.addr_abs, false) as u16;
         let hi = self.read(self.addr_abs + 1, false) as u16;
-        self.program_counter = 0x8000;
+        self.program_counter = (hi << 8) | lo;
         
         self.accumulator = 0;
         self.x_register = 0;
         self.y_register = 0;
         self.stack_pointer = 0xFD;
-        self.status = 0x00 | StatusFlag::U as u8;
+        self.status = StatusFlag::U as u8 | StatusFlag::I as u8;
 
         self.addr_rel = 0x0000;
         self.addr_abs = 0x0000;

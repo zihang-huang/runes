@@ -43,6 +43,7 @@ pub struct Cartridge {
     pub header: INesHeader,
     pub prg_rom: Vec<u8>,
     pub chr_rom: Vec<u8>,
+    pub chr_is_ram: bool,
     pub mirror: Mirroring,
     pub mapper: u8,
 }
@@ -81,9 +82,16 @@ impl Cartridge {
         let mut prg_rom = vec![0; prg_bank_size];
         file.read_exact(&mut prg_rom).unwrap();
 
-        let chr_bank_size = 8192 * header.chr_rom_size as usize;
+        let chr_is_ram = header.chr_rom_size == 0;
+        let chr_bank_size = if chr_is_ram {
+            8192
+        } else {
+            8192 * header.chr_rom_size as usize
+        };
         let mut chr_rom = vec![0; chr_bank_size];
-        file.read_exact(&mut chr_rom).unwrap();
+        if !chr_is_ram {
+            file.read_exact(&mut chr_rom).unwrap();
+        }
 
         // Mirroing
         let four_screen = header.mapper_1 & 0x08 == 0x08;
@@ -99,9 +107,9 @@ impl Cartridge {
             header,
             prg_rom,
             chr_rom,
+            chr_is_ram,
             mirror,
             mapper,
         })
     }
 }
-

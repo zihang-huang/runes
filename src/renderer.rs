@@ -16,7 +16,7 @@ impl PPURenderer {
         }
     }
 
-    pub fn new_custom_size(height: usize, width: usize) -> Self {
+    pub fn new_custom_size(width: usize, height: usize) -> Self {
         Self {
             height,
             width,
