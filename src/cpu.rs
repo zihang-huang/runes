@@ -90,7 +90,7 @@ impl CPU {
         if self.system_clock_counter % 3 == 0 {
             if self.cycles == 0 {
                 self.opcode = self.read(self.program_counter, false);
-                self.program_counter += 1;
+                self.program_counter = self.program_counter.wrapping_add(1);
 
                 let operate = &references::INSTRUCTION_LOOKUP[self.opcode as usize].operate;
                 let addressing_mode = &references::INSTRUCTION_LOOKUP[self.opcode as usize].addrmode;
@@ -221,13 +221,13 @@ impl CPU {
 
     fn imm(&mut self) -> u8 {
         self.addr_abs = self.program_counter;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
         0
     }
 
     fn zp0(&mut self) -> u8 {
         self.addr_abs = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
         self.addr_abs &= 0x00FF;
         0
     }
@@ -235,7 +235,7 @@ impl CPU {
     fn zpx(&mut self) -> u8 {
         let base = self.read(self.program_counter, false);
         self.addr_abs = base.wrapping_add(self.x_register) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
         self.addr_abs &= 0x00FF;
         0
     }
@@ -243,7 +243,7 @@ impl CPU {
     fn zpy(&mut self) -> u8 {
         let base = self.read(self.program_counter, false);
         self.addr_abs = base.wrapping_add(self.y_register) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
         self.addr_abs &= 0x00FF;
         0
     }
@@ -251,10 +251,10 @@ impl CPU {
     fn abs(&mut self) -> u8 {
         //6502 stores memory address in little endian format
         let lo = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         let hi = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         self.addr_abs = (hi << 8) | lo;
         0
@@ -262,10 +262,10 @@ impl CPU {
 
     fn abx(&mut self) -> u8 {
         let lo = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         let hi = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         self.addr_abs = (hi << 8) | lo;
         self.addr_abs += self.x_register as u16;
@@ -280,10 +280,10 @@ impl CPU {
 
     fn aby(&mut self) -> u8 {
         let lo = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         let hi = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         self.addr_abs = (hi << 8) | lo;
         self.addr_abs += self.y_register as u16;
@@ -298,10 +298,10 @@ impl CPU {
 
     fn ind(&mut self) -> u8 {
         let ptr_lo = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         let ptr_hi = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         let ptr = (ptr_hi << 8) | ptr_lo;
 
@@ -318,7 +318,7 @@ impl CPU {
 
     fn izx(&mut self) -> u8 {
         let t = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         let lo = self.read((t + self.x_register as u16) & 0x00FF, false) as u16;
         let hi = self.read((t + self.x_register as u16 + 1) & 0x00FF, false) as u16;
@@ -329,7 +329,7 @@ impl CPU {
 
     fn izy(&mut self) -> u8 {
         let t = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         let lo = self.read(t & 0x00FF, false) as u16;
         let hi = self.read((t + 1) & 0x00FF, false) as u16;
@@ -347,7 +347,7 @@ impl CPU {
 
     fn rel(&mut self) -> u8 {
         self.addr_rel = self.read(self.program_counter, false) as u16;
-        self.program_counter += 1;
+        self.program_counter = self.program_counter.wrapping_add(1);
 
         // two's complement to convert to signed integer
         if (self.addr_rel & 0x80) != 0 {

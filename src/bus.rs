@@ -35,6 +35,10 @@ impl Bus {
 }
 
 impl Bus {
+    pub fn get_controller_state(&self, index: usize) -> u8 {
+        self.controller.get(index).copied().unwrap_or(0)
+    }
+
     pub fn set_controller_state(&mut self, index: usize, state: u8) {
         if let Some(slot) = self.controller.get_mut(index) {
             *slot = state;
@@ -68,7 +72,7 @@ impl Bus {
 
             0x4016 | 0x4017 => {
                 let index = (addr & 0x0001) as usize;
-                let value = self.controller_state[index] & 0x01;
+                let value = (self.controller_state[index] & 0x01) | 0x40;
                 if !self.controller_strobe {
                     self.controller_state[index] >>= 1;
                 }
@@ -124,10 +128,11 @@ impl Bus {
             },
 
             0x4016 => {
-                self.controller_strobe = data & 0x01 == 0x01;
-                if self.controller_strobe {
+                let strobe = data & 0x01 == 0x01;
+                if strobe || self.controller_strobe {
                     self.controller_state = self.controller;
                 }
+                self.controller_strobe = strobe;
             },
 
             0x4017 => {},

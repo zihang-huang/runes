@@ -371,6 +371,80 @@ impl PPU {
         self.frame_buffer[index + 2] = rgb.2;
     }
 
+    fn render_sprites(&mut self) {
+        if self.mask_register & 0x10 == 0 {
+            return;
+        }
+
+        let sprite_height = if self.get_control_flag(PPUControlFlags::SpriteSize) {
+            16
+        } else {
+            8
+        };
+
+        for sprite_index in 0..64 {
+            let base = sprite_index * 4;
+            let y = self.oam[base] as i16 + 1;
+            let tile_index = self.oam[base + 1];
+            let attributes = self.oam[base + 2];
+            let x = self.oam[base + 3] as i16;
+
+            let flip_h = attributes & 0x40 != 0;
+            let flip_v = attributes & 0x80 != 0;
+            let palette_index = attributes & 0x03;
+
+            for row in 0..sprite_height {
+                let row_index = if flip_v {
+                    sprite_height - 1 - row
+                } else {
+                    row
+                };
+
+                let (pattern_table, tile) = if sprite_height == 16 {
+                    let table = if tile_index & 0x01 == 0 { 0x0000 } else { 0x1000 };
+                    let mut tile = tile_index & 0xFE;
+                    let mut row_in_tile = row_index;
+                    if row_in_tile >= 8 {
+                        tile = tile.wrapping_add(1);
+                        row_in_tile -= 8;
+                    }
+                    (table, (tile, row_in_tile))
+                } else {
+                    let table = if self.get_control_flag(PPUControlFlags::PatternSprite) {
+                        0x1000
+                    } else {
+                        0x0000
+                    };
+                    (table, (tile_index, row_index))
+                };
+
+                let tile_addr = pattern_table + (tile.0 as u16) * 16 + tile.1 as u16;
+                let plane_low = self.ppu_read(tile_addr);
+                let plane_high = self.ppu_read(tile_addr + 8);
+
+                for col in 0..8 {
+                    let bit = if flip_h { col } else { 7 - col };
+                    let color_low = (plane_low >> bit) & 0x01;
+                    let color_high = (plane_high >> bit) & 0x01;
+                    let color = (color_high << 1) | color_low;
+                    if color == 0 {
+                        continue;
+                    }
+
+                    let palette_addr = 0x3F10 + (palette_index as u16) * 4 + color as u16;
+                    let palette_value = self.ppu_read(palette_addr) & 0x3F;
+                    let rgb = SYSTEM_PALLETE[palette_value as usize];
+
+                    let pixel_x = x + col as i16;
+                    let pixel_y = y + row as i16;
+                    if pixel_x >= 0 && pixel_y >= 0 {
+                        self.set_frame_pixel(pixel_x as usize, pixel_y as usize, rgb);
+                    }
+                }
+            }
+        }
+    }
+
     fn background_pixel(&self, x: u16, y: u16) -> (u8, u8, u8) {
         let base_nametable = self.control_register & 0x03;
         let base_x = if base_nametable & 0x01 != 0 { 256 } else { 0 };
@@ -465,6 +539,7 @@ impl PPU {
 
             if self.scanline > 261 {
                 self.scanline = 0;
+                self.render_sprites();
                 self.frame_complete = true;
             }
         }

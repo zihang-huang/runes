@@ -7,6 +7,11 @@ use egui_dock::{DockArea, NodeIndex, Style, Tree};
 use crate::opcodes::references;
 use crate::renderer;
 
+const CPU_CLOCK_HZ: f64 = 1_789_773.0;
+const PPU_CLOCK_HZ: f64 = CPU_CLOCK_HZ * 3.0;
+const TARGET_FPS: f64 = 60.0988;
+const MAX_TIMESTEP: Duration = Duration::from_millis(100);
+
 pub fn ui(cpu: CPU) -> Result<(), eframe::Error> {
     env_logger::init();
     let options = eframe::NativeOptions {
@@ -29,6 +34,8 @@ struct RunesContext {
     frame_texture: Option<egui::TextureHandle>,
     running: bool,
     chr_rom_dirty: bool,
+    last_tick: Instant,
+    ppu_cycle_accumulator: f64,
 }
 
 impl egui_dock::TabViewer for RunesContext {
@@ -40,6 +47,7 @@ impl egui_dock::TabViewer for RunesContext {
             "Game" => self.game(ui),
             "CPU Register Inspector" => self.cpu_register_inspector(ui),
             "CPU Debug Inspector" => self.cpu_debug_inspector(ui),
+            "Controller Inspector" => self.controller_inspector(ui),
             "ROM Memory Inspector" => self.rom_memory_inspector(ui),
             "ROM Header Inspector" => self.rom_header_inspector(ui),
             "CHR ROM Inspector" => self.chr_rom_inspector(ui),
@@ -68,15 +76,35 @@ impl RunesContext {
     }
 
     fn run_for_budget(&mut self, budget: Duration) -> bool {
-        let start = Instant::now();
-        while start.elapsed() < budget {
+        self.ppu_cycle_accumulator += budget.as_secs_f64() * PPU_CLOCK_HZ;
+        let cycles_to_run = self.ppu_cycle_accumulator.floor() as u64;
+        self.ppu_cycle_accumulator -= cycles_to_run as f64;
+
+        let mut frame_complete = false;
+        for _ in 0..cycles_to_run {
             self.cpu.clock();
             if self.cpu.bus.ppu.frame_complete {
                 self.cpu.bus.ppu.frame_complete = false;
-                return true;
+                frame_complete = true;
             }
         }
-        false
+
+        frame_complete
+    }
+
+    fn tick(&mut self) -> Duration {
+        let now = Instant::now();
+        let mut delta = now.duration_since(self.last_tick);
+        if delta > MAX_TIMESTEP {
+            delta = MAX_TIMESTEP;
+        }
+        self.last_tick = now;
+        delta
+    }
+
+    fn reset_timing(&mut self) {
+        self.last_tick = Instant::now();
+        self.ppu_cycle_accumulator = 0.0;
     }
 
     fn step_instruction(&mut self) {
@@ -227,6 +255,32 @@ impl RunesContext {
         ui.label(format!("Cycles: {:?}", self.cpu.cycles));
     }
 
+    fn controller_inspector(&mut self, ui: &mut egui::Ui) {
+        ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+
+        let state = self.cpu.bus.get_controller_state(0);
+        ui.label(format!("Controller 1: {:08b}", state));
+
+        let buttons = [
+            ("A", 0),
+            ("B", 1),
+            ("Select", 2),
+            ("Start", 3),
+            ("Up", 4),
+            ("Down", 5),
+            ("Left", 6),
+            ("Right", 7),
+        ];
+
+        for (label, bit) in buttons {
+            let pressed = state & (1 << bit) != 0;
+            ui.horizontal(|ui| {
+                ui.label(format!("{:>6}:", label));
+                ui.label(if pressed { "ON" } else { "off" });
+            });
+        }
+    }
+
     fn rom_header_inspector(&mut self, ui: &mut egui::Ui) {
         ui.label(format!("PRG ROM Size: {}", self.cpu.bus.cartridge.header.prg_rom_size));
         ui.label(format!("CHR ROM Size: {}", self.cpu.bus.cartridge.header.chr_rom_size));
@@ -303,6 +357,14 @@ impl RunesContext {
             ui.label("F: Frame");
             ui.label("R: Reset");
         });
+        ui.horizontal(|ui| {
+            ui.label("Pad:");
+            ui.label("Z=A");
+            ui.label("X=B");
+            ui.label("Tab=Select");
+            ui.label("Enter=Start");
+            ui.label("Arrows/WASD=D-pad");
+        });
 
         if let Some(texture) = &self.frame_texture {
             let available = ui.available_size();
@@ -334,8 +396,11 @@ impl RunesApp {
         let [_ , rom_memory_inspector_node_index] = tree.split_below(cpu_memory_inspector_node_index, 0.38, vec!["ROM Memory Inspector".to_owned(), "ROM Header Inspector".to_owned()]);
         let [_ , cpu_register_inspector_node_index] = tree.split_below(rom_memory_inspector_node_index, 0.7, vec!["CPU Register Inspector".to_owned()]);
 
-
-        tree.split_right(cpu_register_inspector_node_index, 0.5, vec!["CPU Debug Inspector".to_owned()]);
+        tree.split_right(
+            cpu_register_inspector_node_index,
+            0.5,
+            vec!["CPU Debug Inspector".to_owned(), "Controller Inspector".to_owned()],
+        );
 
         Self {
             context: RunesContext {
@@ -346,6 +411,8 @@ impl RunesApp {
                 frame_texture: None,
                 running: false,
                 chr_rom_dirty: true,
+                last_tick: Instant::now(),
+                ppu_cycle_accumulator: 0.0,
             },
             tree
         }
@@ -354,10 +421,14 @@ impl RunesApp {
 
 impl eframe::App for RunesApp { 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let frame_start = Instant::now();
         self.context.update_controller_state(ctx);
 
         if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.context.running = !self.context.running;
+            if self.context.running {
+                self.context.reset_timing();
+            }
         }
 
         let mut frame_dirty = false;
@@ -379,8 +450,18 @@ impl eframe::App for RunesApp {
         }
 
         if self.context.running {
-            frame_complete |= self.context.run_for_budget(Duration::from_millis(4));
-            ctx.request_repaint();
+            let delta = self.context.tick();
+            frame_complete |= self.context.run_for_budget(delta);
+
+            let target_frame_time = Duration::from_secs_f64(1.0 / TARGET_FPS);
+            let frame_time = frame_start.elapsed();
+            if frame_time < target_frame_time {
+                ctx.request_repaint_after(target_frame_time - frame_time);
+            } else {
+                ctx.request_repaint();
+            }
+        } else {
+            self.context.reset_timing();
         }
 
         if frame_dirty || frame_complete {
